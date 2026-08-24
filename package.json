@@ -1,0 +1,14 @@
+{
+  "name": "wire-export-build",
+  "private": true,
+  "description": "Build-only package: bundles teleproto into a single browser-ready file so the deployed site never fetches it live from a third-party CDN.",
+  "dependencies": {
+    "teleproto": "1.225.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  },
+  "scripts": {
+    "build": "esbuild ./entry.js --bundle --format=esm --platform=browser --outfile=../vendor/teleproto.bundle.js --minify"
+  }
+}

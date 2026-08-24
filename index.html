@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wire — Chat Exporter</title>
+<style>
+  :root{ --ink:#132321; --panel:#f4efe3; --brass:#8a6d1f; --copper:#a1481f; --line:#d8d0bb; --text:#221d12; --dim:#6b6555; }
+  *{box-sizing:border-box;}
+  body{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; max-width:640px; margin:0 auto; padding:24px 18px 80px; color:var(--text); background:#fbf8f0; }
+  h1{ font-size:20px; margin:0 0 4px; }
+  .sub{ color:var(--dim); font-size:13px; margin:0 0 24px; }
+  section{ border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; background:var(--panel); }
+  section h2{ font-size:14px; margin:0 0 12px; text-transform:uppercase; letter-spacing:0.05em; color:var(--copper); }
+  section.disabled{ opacity:0.45; pointer-events:none; }
+  label{ display:block; font-size:12.5px; color:var(--dim); margin-bottom:4px; margin-top:10px; }
+  label:first-child{ margin-top:0; }
+  input[type=text],input[type=password],input[type=tel]{ width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:5px; font-size:14px; background:#fff; }
+  button{ margin-top:14px; padding:10px 16px; border:none; border-radius:5px; background:var(--copper); color:#fff; font-size:13.5px; font-weight:600; cursor:pointer; }
+  button:disabled{ background:#bbb; cursor:default; }
+  button.secondary{ background:transparent; color:var(--copper); border:1px solid var(--copper); }
+  .hint{ font-size:11.5px; color:var(--dim); margin-top:6px; }
+  .dialog-list{ display:flex; flex-direction:column; gap:6px; max-height:360px; overflow-y:auto; }
+  .dialog-item{ display:flex; justify-content:space-between; align-items:center; padding:9px 10px; border:1px solid var(--line); border-radius:5px; background:#fff; cursor:pointer; font-size:13.5px; }
+  .dialog-item:hover{ border-color:var(--copper); }
+  .dialog-item .kind{ font-size:11px; color:var(--dim); }
+  #log{ font-family:ui-monospace,Menlo,monospace; font-size:12px; background:#161b19; color:#d9d3bd; border-radius:6px; padding:12px; height:220px; overflow-y:auto; white-space:pre-wrap; }
+  .row{ display:flex; gap:8px; }
+  .row > *{ flex:1; }
+</style>
+</head>
+<body>
+
+<h1>Wire — chat exporter</h1>
+<p class="sub">Runs entirely in your browser. Your phone number, code, and 2FA password go straight to Telegram over an encrypted connection — this page and whatever sent you here never see them.</p>
+
+<section id="sec-config">
+  <h2>1. API credentials</h2>
+  <label for="apiId">api_id</label>
+  <input type="text" id="apiId" value="2040">
+  <label for="apiHash">api_hash</label>
+  <input type="text" id="apiHash" value="b18441a1ff607e10a989891a5462e627">
+  <p class="hint">
+    Prefilled with Telegram Desktop's reverse-engineered credentials for convenience.
+    Shared credentials can occasionally get rate-limited (Telegram has flagged this exact
+    pair before under heavy use). If login fails with an API_ID_PUBLISHED_FLOOD-style error,
+    get your own free pair at <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a> and paste it in here.
+  </p>
+  <p class="hint">Saved to this browser's local storage so you won't need to re-enter it. Not sent anywhere else.</p>
+  <button id="btn-clear-local" class="secondary">Clear saved data on this device</button>
+</section>
+
+<section id="sec-login">
+  <h2>2. Log in</h2>
+  <div id="login-phone-step">
+    <label for="phone">Phone number (with country code)</label>
+    <input type="tel" id="phone" placeholder="+15551234567">
+    <button id="btn-send-code">Send code</button>
+  </div>
+  <div id="login-code-step" style="display:none">
+    <label for="code">Login code</label>
+    <input type="text" id="code" inputmode="numeric">
+    <button id="btn-submit-code">Continue</button>
+  </div>
+  <div id="login-2fa-step" style="display:none">
+    <label for="password">Two-factor password</label>
+    <input type="password" id="password">
+    <button id="btn-submit-password">Continue</button>
+  </div>
+  <p class="hint">Your session is cached in this browser's local storage so you won't need to log in again on this device. Nothing is written anywhere else.</p>
+</section>
+
+<section id="sec-chats" class="disabled">
+  <h2>3. Pick a chat</h2>
+  <div id="dialog-list" class="dialog-list"><p class="hint">Log in to load your chats.</p></div>
+  <button id="btn-reload-chats" class="secondary" style="display:none">Reload chat list</button>
+</section>
+
+<section id="sec-export" class="disabled">
+  <h2>4. Export</h2>
+  <p id="export-target" class="hint">No chat selected.</p>
+  <button id="btn-pick-folder">Choose destination folder</button>
+  <button id="btn-start-export" disabled>Start export</button>
+  <div id="log" style="margin-top:14px; display:none"></div>
+</section>
+
+<script type="module">
+import { TelegramClient, StringSession, Api } from "./vendor/teleproto.bundle.js";
+
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+
+function log(msg){
+  logEl.style.display = 'block';
+  logEl.textContent += msg + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+if (!window.showDirectoryPicker){
+  document.body.insertAdjacentHTML('afterbegin',
+    '<section style="background:#fdecec;border-color:#e0a0a0"><h2 style="color:#a02020">Unsupported browser</h2>' +
+    '<p class="hint">Saving files needs the File System Access API, available in Chrome and Edge. ' +
+    'Please reopen this page in one of those.</p></section>');
+}
+
+const SESSION_KEY = 'wire_session_string';
+const API_ID_KEY = 'wire_api_id';
+const API_HASH_KEY = 'wire_api_hash';
+const apiIdInput = $('apiId');
+const apiHashInput = $('apiHash');
+
+// Restore previously-saved api_id/api_hash, if any, otherwise keep the
+// prefilled defaults already in the HTML. These are stored in localStorage,
+// scoped to this browser + this site's origin only - not sent anywhere.
+const savedApiId = localStorage.getItem(API_ID_KEY);
+const savedApiHash = localStorage.getItem(API_HASH_KEY);
+if (savedApiId) apiIdInput.value = savedApiId;
+if (savedApiHash) apiHashInput.value = savedApiHash;
+
+function persistCredentials(){
+  localStorage.setItem(API_ID_KEY, apiIdInput.value.trim());
+  localStorage.setItem(API_HASH_KEY, apiHashInput.value.trim());
+}
+apiIdInput.addEventListener('change', persistCredentials);
+apiHashInput.addEventListener('change', persistCredentials);
+
+$('btn-clear-local').addEventListener('click', () => {
+  if (!confirm('This logs you out on this device and clears saved api_id/api_hash. Continue?')) return;
+  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(API_ID_KEY);
+  localStorage.removeItem(API_HASH_KEY);
+  location.reload();
+});
+
+let client = null;
+let selectedDialog = null;
+let destDirHandle = null;
+
+function getClient(){
+  const apiId = parseInt(apiIdInput.value.trim(), 10);
+  const apiHash = apiHashInput.value.trim();
+  const savedSession = localStorage.getItem(SESSION_KEY) || '';
+  return new TelegramClient(new StringSession(savedSession), apiId, apiHash, { connectionRetries: 5 });
+}
+
+// ---------- Login flow ----------
+// GramJS's client.start() wants callbacks it can await for each credential.
+// We wire those callbacks to resolve from button clicks on the matching
+// section of the form, so the UI drives the async login handshake.
+
+let resolvePhone, resolveCode, resolvePassword;
+
+$('btn-send-code').addEventListener('click', () => {
+  const phone = $('phone').value.trim();
+  if (!phone){ alert('Enter your phone number.'); return; }
+  $('login-phone-step').style.display = 'none';
+  $('login-code-step').style.display = 'block';
+  resolvePhone(phone);
+});
+
+$('btn-submit-code').addEventListener('click', () => {
+  const code = $('code').value.trim();
+  if (!code){ alert('Enter the code.'); return; }
+  resolveCode(code);
+});
+
+$('btn-submit-password').addEventListener('click', () => {
+  const pw = $('password').value;
+  resolvePassword(pw);
+});
+
+async function login(){
+  client = getClient();
+  await client.connect();
+
+  if (await client.isUserAuthorized()){
+    log('Already logged in (reused saved session).');
+    onLoggedIn();
+    return;
+  }
+
+  $('sec-login').querySelector('h2').textContent = '2. Log in — check your Telegram app';
+
+  await client.start({
+    phoneNumber: () => new Promise((res) => { resolvePhone = res; }),
+    phoneCode: () => new Promise((res) => { resolveCode = res; $('login-2fa-step').style.display = 'none'; }),
+    password: () => new Promise((res) => {
+      resolvePassword = res;
+      $('login-code-step').style.display = 'none';
+      $('login-2fa-step').style.display = 'block';
+    }),
+    onError: (err) => { console.error(err); alert('Login error: ' + err.message); },
+  });
+
+  localStorage.setItem(SESSION_KEY, client.session.save());
+  onLoggedIn();
+}
+
+function onLoggedIn(){
+  $('sec-login').querySelector('h2').textContent = '2. Logged in';
+  $('sec-chats').classList.remove('disabled');
+  loadDialogs();
+}
+
+login();
+
+// ---------- Chat list ----------
+
+async function loadDialogs(){
+  const listEl = $('dialog-list');
+  listEl.innerHTML = '<p class="hint">Loading chats…</p>';
+  $('btn-reload-chats').style.display = 'inline-block';
+
+  const dialogs = await client.getDialogs({ limit: 200 });
+  listEl.innerHTML = '';
+
+  for (const d of dialogs){
+    const item = document.createElement('div');
+    item.className = 'dialog-item';
+    const kind = d.isUser ? 'user' : d.isGroup ? 'group' : d.isChannel ? 'channel' : '?';
+    item.innerHTML = `<span>${escapeHtml(d.title || d.name || 'Untitled')}</span><span class="kind">${kind}</span>`;
+    item.addEventListener('click', () => selectDialog(d));
+    listEl.appendChild(item);
+  }
+}
+
+$('btn-reload-chats').addEventListener('click', loadDialogs);
+
+function selectDialog(d){
+  selectedDialog = d;
+  document.querySelectorAll('.dialog-item').forEach(el => el.style.borderColor = 'var(--line)');
+  event.currentTarget.style.borderColor = 'var(--copper)';
+
+  $('sec-export').classList.remove('disabled');
+  $('export-target').textContent = `Selected: ${d.title || d.name} (id ${d.id})`;
+}
+
+// ---------- Destination folder ----------
+
+$('btn-pick-folder').addEventListener('click', async () => {
+  try{
+    destDirHandle = await window.showDirectoryPicker();
+    $('btn-start-export').disabled = false;
+    log(`Destination folder selected. Export will be saved under a subfolder named by chat id.`);
+  }catch(e){
+    log('Folder selection cancelled.');
+  }
+});
+
+// ---------- Export ----------
+
+$('btn-start-export').addEventListener('click', () => {
+  $('btn-start-export').disabled = true;
+  runExport().catch(e => { console.error(e); log('ERROR: ' + e.message); });
+});
+
+function extFor(msg){
+  if (msg.photo) return 'jpg';
+  if (msg.sticker) return 'webp';
+  if (msg.gif) return 'mp4';
+  if (msg.video || msg.videoNote) return 'mp4';
+  if (msg.voice) return 'ogg';
+  if (msg.audio) return 'mp3';
+  if (msg.document && msg.document.mimeType){
+    const mt = msg.document.mimeType;
+    if (mt.includes('/')) return mt.split('/')[1].split(';')[0];
+  }
+  return 'bin';
+}
+
+const senderCache = new Map();
+async function getSenderInfo(msg){
+  const id = msg.senderId ? msg.senderId.toString() : null;
+  if (!id) return null;
+  if (senderCache.has(id)) return senderCache.get(id);
+  let info = { id, name: id, username: null };
+  try{
+    const entity = await msg.getSender();
+    if (entity){
+      info.name = entity.firstName || entity.title || info.name;
+      info.username = entity.username || null;
+    }
+  }catch(e){ /* best effort */ }
+  senderCache.set(id, info);
+  return info;
+}
+
+function reactionsToJson(msg){
+  const out = [];
+  const results = msg.reactions && msg.reactions.results ? msg.reactions.results : [];
+  for (const r of results){
+    let emoji = 'custom';
+    if (r.reaction && r.reaction.emoticon) emoji = r.reaction.emoticon;
+    out.push({ emoji, count: r.count });
+  }
+  return out;
+}
+
+async function messageToDict(msg, mediaRelPath){
+  const sender = await getSenderInfo(msg);
+  return {
+    id: msg.id,
+    date: msg.date ? new Date(msg.date * 1000).toISOString() : null,
+    edit_date: msg.editDate ? new Date(msg.editDate * 1000).toISOString() : null,
+    sender,
+    text: msg.message || '',
+    reply_to_msg_id: msg.replyTo ? msg.replyTo.replyToMsgId : null,
+    forward_from: msg.fwdFrom ? { date: msg.fwdFrom.date ? new Date(msg.fwdFrom.date * 1000).toISOString() : null } : null,
+    media_type: msg.media ? msg.media.className : null,
+    media_file: mediaRelPath,
+    reactions: reactionsToJson(msg),
+    is_pinned: !!msg.pinned,
+  };
+}
+
+async function readExisting(chatDirHandle){
+  try{
+    const fh = await chatDirHandle.getFileHandle('chat.json');
+    const file = await fh.getFile();
+    const data = JSON.parse(await file.text());
+    return Array.isArray(data.messages) ? data.messages : [];
+  }catch(e){
+    return [];
+  }
+}
+
+async function writeFile(dirHandle, name, contents){
+  const fh = await dirHandle.getFileHandle(name, { create: true });
+  const writable = await fh.createWritable();
+  await writable.write(contents);
+  await writable.close();
+}
+
+async function runExport(){
+  const chatId = selectedDialog.id.toString();
+  const chatDirHandle = await destDirHandle.getDirectoryHandle(chatId, { create: true });
+  const mediaDirHandle = await chatDirHandle.getDirectoryHandle('media', { create: true });
+
+  log(`Exporting "${selectedDialog.title || selectedDialog.name}" -> /${chatId}/`);
+
+  const existingMessages = await readExisting(chatDirHandle);
+  let latestId = 0;
+  for (const m of existingMessages) if (m.id > latestId) latestId = m.id;
+  if (existingMessages.length){
+    log(`Found ${existingMessages.length} existing messages (latest id ${latestId}). Fetching only newer ones.`);
+  }
+
+  const newMessages = [];
+  const iterOpts = { reverse: false };
+  if (latestId) iterOpts.minId = latestId;
+
+  let count = 0;
+  for await (const msg of client.iterMessages(selectedDialog.entity, iterOpts)){
+    let mediaRelPath = null;
+    if (msg.media){
+      try{
+        const buffer = await client.downloadMedia(msg);
+        if (buffer){
+          const filename = `${msg.id}.${extFor(msg)}`;
+          await writeFile(mediaDirHandle, filename, buffer);
+          mediaRelPath = `media/${filename}`;
+        }
+      }catch(e){
+        log(`  [warn] media download failed for message ${msg.id}: ${e.message}`);
+      }
+    }
+    newMessages.push(await messageToDict(msg, mediaRelPath));
+    count++;
+    if (count % 50 === 0) log(`  ...${count} new messages processed`);
+  }
+
+  newMessages.reverse();
+  const allMessages = existingMessages.concat(newMessages);
+
+  const chatJson = {
+    chat_name: selectedDialog.title || selectedDialog.name,
+    chat_id: selectedDialog.id.toString(),
+    exported_at: new Date().toISOString(),
+    message_count: allMessages.length,
+    messages: allMessages,
+  };
+  const jsonText = JSON.stringify(chatJson, null, 2);
+
+  // Safety: write to a tmp file first. Only touch the real chat.json once
+  // the full write has succeeded, so a crash mid-export can't corrupt it.
+  await writeFile(chatDirHandle, 'chat.json.tmp', jsonText);
+  await writeFile(chatDirHandle, 'chat.json', jsonText);
+  try{ await chatDirHandle.removeEntry('chat.json.tmp'); }catch(e){}
+
+  log(`Done. ${newMessages.length} new message(s) added (${allMessages.length} total).`);
+  $('btn-start-export').disabled = false;
+}
+
+function escapeHtml(s){
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+name: Build teleproto bundle and deploy
+
+# Runs on every push to main. Rebuilds vendor/teleproto.bundle.js from the
+# pinned version in build/package.json and commits it if it changed, so the
+# site never fetches teleproto live from a third-party CDN at request time.
+# The bundle only changes when you deliberately bump the version in
+# build/package.json and push - not on every visitor's page load.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install build deps
+        working-directory: build
+        run: npm install
+
+      - name: Build bundle
+        working-directory: build
+        run: npm run build
+
+      - name: Commit bundle if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- vendor/teleproto.bundle.js; then
+            git add vendor/teleproto.bundle.js
+            git commit -m "chore: rebuild teleproto bundle [skip ci]"
+            git push
+          else
+            echo "Bundle unchanged, nothing to commit."
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
