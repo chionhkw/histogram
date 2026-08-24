@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import { NodeModulesPolyfillPlugin } from '@esbuild-plugins/node-modules-polyfill';
 
 build({
-    entryPoints: ['index.js'],
+    entryPoints: ['entry.js'],
     bundle: true,
     minify: true,
     sourcemap: true,
