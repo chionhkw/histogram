@@ -6,7 +6,8 @@
     "teleproto": "1.225.3"
   },
   "devDependencies": {
-    "esbuild": "^0.24.0"
+    "esbuild": "^0.25.0",
+    "@esbuild-plugins/node-modules-polyfill": "^0.2.2"
   },
   "scripts": {
     "build": "node esbuild.config.js"
