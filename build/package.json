@@ -10,6 +10,6 @@
     "@esbuild-plugins/node-modules-polyfill": "^0.2.2"
   },
   "scripts": {
-    "build": "node esbuild.config.js"
+    "build": "node esbuild.config.mjs"
   }
 }
