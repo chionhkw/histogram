@@ -8,7 +8,7 @@ build({
     sourcemap: true,
     platform: 'browser', // Tell esbuild this runs in a web browser!
     target: ['es2022'],
-    outfile: 'dist/bundle.js',
+    outfile: '../vendor/teleproto.bundle.js',
     plugins: [
         NodeModulesPolyfillPlugin() // Polyfills Node's crypto, stream, buffers etc., for teleproto
     ],
